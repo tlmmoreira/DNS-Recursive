@@ -1,0 +1,115 @@
+#!/bin/bash
+# ==========================================================
+# Script: DNS com Root Hints seguro no Debian 12 (IPv4 e IPv6)
+# Autor: Amoreiratech & ChatGPT
+# Contato: 92 9 93241053
+# Função extra: Atualização automática mensal dos root hints
+# ==========================================================
+
+echo "=== Atualizando sistema ==="
+apt update && apt upgrade -y
+
+echo "=== Instalando BIND9 e utilitários ==="
+apt install bind9 bind9utils bind9-doc ufw wget cron -y
+
+echo "=== Baixando root hints atualizados ==="
+wget https://www.internic.net/domain/named.root -O /etc/bind/db.root
+
+echo "=== Configurando opções do BIND9 ==="
+cat << 'EOF' > /etc/bind/named.conf.options
+options {
+    directory "/var/cache/bind";
+
+    // Segurança
+    recursion yes;
+    allow-recursion { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
+    allow-query { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
+    allow-query-cache { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
+
+    minimal-responses yes;
+    dnssec-validation auto;
+    allow-transfer { none; };
+
+    listen-on { any; };
+    listen-on-v6 { any; };
+
+    forwarders {};
+
+    auth-nxdomain no;
+};
+
+// Root hints
+zone "." {
+    type hint;
+    file "/etc/bind/db.root";
+};
+EOF
+
+echo "=== Configurando logs do BIND9 ==="
+cat << 'EOF' > /etc/bind/named.conf.logging
+logging {
+    channel security_file {
+        file "/var/log/named/security.log" versions 5 size 10m;
+        severity dynamic;
+        print-time yes;
+    };
+    category security { security_file; };
+    category queries { security_file; };
+};
+EOF
+
+if ! grep -q "include "/etc/bind/named.conf.logging";" /etc/bind/named.conf; then
+    sed -i '1i include "/etc/bind/named.conf.logging";' /etc/bind/named.conf
+fi
+
+echo "=== Criando pasta de logs ==="
+mkdir -p /var/log/named
+chown bind:bind /var/log/named
+
+echo "=== Ajustando permissões do root hints ==="
+chown root:bind /etc/bind/db.root
+chmod 644 /etc/bind/db.root
+
+echo "=== Configurando firewall ==="
+ufw allow from 192.168.0.0/16 to any port 53
+ufw allow from 10.0.0.0/8 to any port 53
+ufw allow from 172.16.0.0/12 to any port 53
+ufw allow from 100.64.0.0/10 to any port 53
+ufw allow from 2000::/3 to any port 53 proto udp
+ufw allow from 2000::/3 to any port 53 proto tcp
+ufw enable
+
+echo "=== Criando script de atualização do root hints ==="
+cat << 'EOF' > /usr/local/bin/update-root-hints.sh
+#!/bin/bash
+wget -q https://www.internic.net/domain/named.root -O /etc/bind/db.root.new
+if [ -s /etc/bind/db.root.new ]; then
+    mv /etc/bind/db.root.new /etc/bind/db.root
+    chown root:bind /etc/bind/db.root
+    chmod 644 /etc/bind/db.root
+    systemctl restart bind9
+    echo "$(date): Root hints atualizado e BIND9 reiniciado" >> /var/log/named/root-hints-update.log
+else
+    echo "$(date): Falha ao baixar root hints" >> /var/log/named/root-hints-update.log
+    rm -f /etc/bind/db.root.new
+fi
+EOF
+
+chmod +x /usr/local/bin/update-root-hints.sh
+
+echo "=== Agendando atualização mensal ==="
+(crontab -l 2>/dev/null; echo "0 3 1 * * /usr/local/bin/update-root-hints.sh") | crontab -
+
+echo "=== Reiniciando serviços ==="
+systemctl restart bind9
+systemctl enable bind9
+systemctl restart cron
+systemctl enable cron
+
+echo "=== Testando resolução IPv4 ==="
+dig @127.0.0.1 google.com | grep "NOERROR"
+
+echo "=== Testando resolução IPv6 ==="
+dig @::1 google.com AAAA | grep "NOERROR"
+
+echo "=== DNS com Root Hints seguro e atualização automática configurado com sucesso! ==="
