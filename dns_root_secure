@@ -1,117 +1,79 @@
 #!/bin/bash
-# ==========================================================
-# Script: DNS com Root Hints seguro no Debian 12 (IPv4 e IPv6)
-# Autor: Thiago & ChatGPT
-# Função extra: Atualização automática mensal dos root hints
-# ==========================================================
+# Script de instalação do Unbound com root hints - Debian 12 (IPv4 + IPv6 + Firewall)
+# Autor: Thiago Moreira (adaptado pelo ChatGPT)
 
-echo "=== Atualizando sistema ==="
+set -e
+
+echo "=== Atualizando pacotes ==="
 apt update && apt upgrade -y
 
-echo "=== Instalando BIND9 e utilitários ==="
-apt install bind9 bind9utils bind9-doc dnsutils ufw wget cron -y
+echo "=== Instalando Unbound e UFW (firewall) ==="
+apt install -y unbound curl ufw
 
-echo "=== Baixando root hints atualizados ==="
-wget https://www.internic.net/domain/named.root -O /etc/bind/db.root
+echo "=== Baixando Root Hints da IANA ==="
+curl -o /var/lib/unbound/root.hints https://www.internic.net/domain/named.root
 
-echo "=== Configurando opções do BIND9 ==="
-cat << 'EOF' > /etc/bind/named.conf.options
-options {
-    directory "/var/cache/bind";
+echo "=== Criando configuração do Unbound ==="
+cat > /etc/unbound/unbound.conf.d/root.conf <<EOF
+server:
+    verbosity: 1
 
-    // Segurança
-    recursion yes;
-    allow-recursion { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
-    allow-query { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
-    allow-query-cache { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
+    # Interfaces (IPv4 e IPv6)
+    interface: 0.0.0.0
+    interface: ::0
 
-    minimal-responses yes;
-    dnssec-validation auto;
-    allow-transfer { none; };
+    # Redes autorizadas (ajuste conforme sua rede interna)
+    access-control: 127.0.0.0/8 allow
+    access-control: ::1 allow
+    access-control: 192.168.0.0/16 allow
+    access-control: 172.16.0.0/12 allow
+    access-control: 10.0.0.0/8 allow
+    access-control: 100.64.0.0/10 allow
+    access-control: 170.83.151.0/24 allow
+    access-control: fc00::/7 allow
+    access-control: fe80::/10 allow
+    access-control: 2804:2C8C:C000::/34 allow
 
-    listen-on { any; };
-    listen-on-v6 { any; };
+    # Root hints
+    root-hints: "/var/lib/unbound/root.hints"
 
-    forwarders {};
+    # Segurança
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-referral-path: yes
+    unwanted-reply-threshold: 10000000
 
-    auth-nxdomain no;
-};
+    # Performance
+    num-threads: 2
+    msg-cache-size: 50m
+    rrset-cache-size: 100m
+    cache-min-ttl: 3600
+    cache-max-ttl: 86400
 
-// Root hints
-zone "." {
-    type hint;
-    file "/etc/bind/db.root";
-};
+    # DNS Privacy
+    qname-minimisation: yes
+    prefetch: yes
+    aggressive-nsec: yes
+    use-caps-for-id: yes
 EOF
 
-echo "=== Configurando logs do BIND9 ==="
-cat << 'EOF' > /etc/bind/named.conf.logging
-logging {
-    channel security_file {
-        file "/var/log/named/security.log" versions 5 size 10m;
-        severity dynamic;
-        print-time yes;
-    };
-    category security { security_file; };
-    category queries { security_file; };
-};
-EOF
+echo "=== Testando configuração do Unbound ==="
+unbound-checkconf
 
-if ! grep -q "include "/etc/bind/named.conf.logging";" /etc/bind/named.conf; then
-    sed -i '1i include "/etc/bind/named.conf.logging";' /etc/bind/named.conf
-fi
+echo "=== Habilitando e iniciando o serviço ==="
+systemctl enable unbound
+systemctl restart unbound
 
-echo "=== Criando pasta de logs ==="
-mkdir -p /var/log/named
-chown bind:bind /var/log/named
-
-echo "=== Ajustando permissões do root hints ==="
-chown root:bind /etc/bind/db.root
-chmod 644 /etc/bind/db.root
-
-echo "=== Configurando firewall ==="
-ufw allow from 192.168.0.0/16 to any port 53
-ufw allow from 10.0.0.0/8 to any port 53
-ufw allow from 172.16.0.0/12 to any port 53
-ufw allow from 100.64.0.0/10 to any port 53
-ufw allow from 170.83.151.0/24 to any port 53
-ufw allow from 2000::/3 to any port 53 proto udp
-ufw allow from 2000::/3 to any port 53 proto tcp
-ufw allow from 2804:2C8C:C000::/34 to any port 53 proto udp
-ufw allow from 2804:2C8C:C000::/34 to any port 53 proto tcp
+echo "=== Configurando firewall (UFW) ==="
+ufw allow ssh        # Mantém acesso remoto
+ufw allow 53/udp     # Libera DNS UDP
+ufw allow 53/tcp     # Libera DNS TCP
 ufw enable
 
-echo "=== Criando script de atualização do root hints ==="
-cat << 'EOF' > /usr/local/bin/update-root-hints.sh
-#!/bin/bash
-wget -q https://www.internic.net/domain/named.root -O /etc/bind/db.root.new
-if [ -s /etc/bind/db.root.new ]; then
-    mv /etc/bind/db.root.new /etc/bind/db.root
-    chown root:bind /etc/bind/db.root
-    chmod 644 /etc/bind/db.root
-    systemctl restart bind9
-    echo "$(date): Root hints atualizado e BIND9 reiniciado" >> /var/log/named/root-hints-update.log
-else
-    echo "$(date): Falha ao baixar root hints" >> /var/log/named/root-hints-update.log
-    rm -f /etc/bind/db.root.new
-fi
-EOF
+echo "=== Testando resolução de DNS ==="
+dig @127.0.0.1 www.google.com || true
+dig @::1 www.google.com || true
 
-chmod +x /usr/local/bin/update-root-hints.sh
-
-echo "=== Agendando atualização mensal ==="
-(crontab -l 2>/dev/null; echo "0 3 1 * * /usr/local/bin/update-root-hints.sh") | crontab -
-
-echo "=== Reiniciando serviços ==="
-systemctl restart bind9
-systemctl enable bind9
-systemctl restart cron
-systemctl enable cron
-
-echo "=== Testando resolução IPv4 ==="
-dig @127.0.0.1 google.com | grep "NOERROR"
-
-echo "=== Testando resolução IPv6 ==="
-dig @::1 google.com AAAA | grep "NOERROR"
-
-echo "=== DNS com Root Hints seguro e atualização automática configurado com sucesso! ==="
+echo "=== Instalação concluída com sucesso! ==="
