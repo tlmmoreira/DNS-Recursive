@@ -29,10 +29,8 @@ server:
     access-control: 172.16.0.0/12 allow
     access-control: 10.0.0.0/8 allow
     access-control: 100.64.0.0/10 allow
-    access-control: 170.83.151.0/24 allow
     access-control: fc00::/7 allow
     access-control: fe80::/10 allow
-    access-control: 2804:2C8C:C000::/34 allow
 
     # Root hints
     root-hints: "/var/lib/unbound/root.hints"
