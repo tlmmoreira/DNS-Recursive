@@ -1,8 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # Script: DNS com Root Hints seguro no Debian 12 (IPv4 e IPv6)
-# Autor: Amoreiratech & ChatGPT
-# Contato: 92 9 93241053
+# Autor: Thiago & ChatGPT
 # Função extra: Atualização automática mensal dos root hints
 # ==========================================================
 
@@ -10,7 +9,7 @@ echo "=== Atualizando sistema ==="
 apt update && apt upgrade -y
 
 echo "=== Instalando BIND9 e utilitários ==="
-apt install bind9 bind9utils bind9-doc ufw wget cron -y
+apt install bind9 bind9utils bind9-doc dnsutils ufw wget cron -y
 
 echo "=== Baixando root hints atualizados ==="
 wget https://www.internic.net/domain/named.root -O /etc/bind/db.root
@@ -22,9 +21,9 @@ options {
 
     // Segurança
     recursion yes;
-    allow-recursion { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
-    allow-query { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
-    allow-query-cache { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 2000::/3; };
+    allow-recursion { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
+    allow-query { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
+    allow-query-cache { 192.168.0.0/16; 10.0.0.0/8; 172.16.0.0/12; 100.64.0.0/10; 170.83.151.0/24; 2000::/3; 2804:2C8C:C000::/34; };
 
     minimal-responses yes;
     dnssec-validation auto;
@@ -75,8 +74,11 @@ ufw allow from 192.168.0.0/16 to any port 53
 ufw allow from 10.0.0.0/8 to any port 53
 ufw allow from 172.16.0.0/12 to any port 53
 ufw allow from 100.64.0.0/10 to any port 53
+ufw allow from 170.83.151.0/24 to any port 53
 ufw allow from 2000::/3 to any port 53 proto udp
 ufw allow from 2000::/3 to any port 53 proto tcp
+ufw allow from 2804:2C8C:C000::/34 to any port 53 proto udp
+ufw allow from 2804:2C8C:C000::/34 to any port 53 proto tcp
 ufw enable
 
 echo "=== Criando script de atualização do root hints ==="
